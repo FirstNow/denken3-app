@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
+import LatexText from './LatexText';
 
 interface RawQuestion {
   id: string;
@@ -125,7 +126,6 @@ export default function Home() {
         .order('frequency_score', { ascending: false });
 
       if (selectedCategory !== 'all') {
-        // 「技術基準」や「電気事業法」等の前方一致・部分一致対応
         query = query.ilike('category', `%${selectedCategory}%`);
       }
 
@@ -145,7 +145,6 @@ export default function Home() {
 
       rawList = (data?.map((item: any) => item.questions).filter(Boolean) as RawQuestion[]) || [];
     } else if (mode === 'exam') {
-      // 模試モード：本試験比率（A問題・B問題・各分野バランス抽出）
       const { data } = await supabase.from('questions').select('*');
       if (data) {
         rawList = shuffleArray(data).slice(0, 10);
@@ -309,7 +308,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* 3大モード切り替え */}
         <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-200/70 rounded-xl mb-3 text-xs font-bold">
           <button
             onClick={() => setMode('all')}
@@ -344,7 +342,6 @@ export default function Home() {
           </button>
         </div>
 
-        {/* 分野別セレクター（頻出問題演習モード時のみ表示） */}
         {mode === 'all' && (
           <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-4 scrollbar-none">
             {CATEGORIES.map((cat) => {
@@ -366,7 +363,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* 進捗バー */}
         {questions.length > 0 && !isExamFinished && (
           <div className="mb-4">
             <div className="flex justify-between items-center text-xs font-bold text-slate-500 mb-1.5">
@@ -390,7 +386,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* 模試結果 */}
         {mode === 'exam' && isExamFinished && examResult && (
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm text-center mb-6">
             <span className="text-4xl mb-2 inline-block">{examResult.isPassed ? '🎉' : '📚'}</span>
@@ -419,7 +414,7 @@ export default function Home() {
                         {isItemCorrect ? '⭕ 正解' : '❌ 不正解'}
                       </span>
                     </div>
-                    <p className="text-slate-600 line-clamp-1">{q.question_text}</p>
+                    <LatexText content={q.question_text} className="text-slate-600 line-clamp-1 block" />
                   </div>
                 );
               })}
@@ -434,7 +429,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* 出題カード */}
         {loading ? (
           <div className="bg-white rounded-2xl p-12 text-center text-slate-400 text-sm border border-slate-200">
             問題を読み込み中...
@@ -443,9 +437,6 @@ export default function Home() {
           <div className="bg-white rounded-2xl p-10 text-center border border-slate-200">
             <p className="text-slate-700 font-bold mb-2">
               該当する問題がありません。
-            </p>
-            <p className="text-xs text-slate-400 mb-4">
-              データを投入するか、別の分野を選択してください。
             </p>
             {mode === 'all' && selectedCategory !== 'all' && (
               <button
@@ -474,9 +465,10 @@ export default function Home() {
               )}
             </div>
 
-            <p className="text-[15px] sm:text-base text-slate-800 font-medium leading-relaxed mb-6 whitespace-pre-wrap">
-              {currentQ.question_text}
-            </p>
+            {/* 問題文（数式レンダリング対応） */}
+            <div className="text-[15px] sm:text-base text-slate-800 font-medium leading-relaxed mb-6 whitespace-pre-wrap">
+              <LatexText content={currentQ.question_text} />
+            </div>
 
             {/* 選択肢リスト */}
             <div className="space-y-2.5">
@@ -511,12 +503,14 @@ export default function Home() {
                       <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs sm:text-sm">
                         {parsedCells.map((cell, cIdx) => (
                           <span key={cIdx} className="bg-slate-100/80 px-2 py-1 rounded text-slate-800 font-medium">
-                            {cell}
+                            <LatexText content={cell} />
                           </span>
                         ))}
                       </div>
                     ) : (
-                      <span className="text-sm leading-snug flex-1">{optText}</span>
+                      <span className="text-sm leading-snug flex-1">
+                        <LatexText content={optText} />
+                      </span>
                     )}
                   </button>
                 );
@@ -552,6 +546,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* 解説（数式レンダリング対応） */}
         {mode !== 'exam' && isAnswered && currentQ && (
           <div className={`p-5 rounded-2xl border mb-6 ${isCorrect ? 'bg-emerald-50/70 border-emerald-200' : 'bg-rose-50/70 border-rose-200'}`}>
             <span className={`text-base font-bold block mb-1 ${isCorrect ? 'text-emerald-700' : 'text-rose-700'}`}>
@@ -561,7 +556,7 @@ export default function Home() {
               根拠法令: {currentQ.law_reference || '条文参照'}
             </p>
             <div className="text-xs sm:text-sm text-slate-700 leading-relaxed bg-white p-3.5 rounded-xl border border-slate-100 whitespace-pre-wrap">
-              {currentQ.explanation}
+              <LatexText content={currentQ.explanation} />
             </div>
           </div>
         )}
