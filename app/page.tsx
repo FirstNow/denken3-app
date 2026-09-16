@@ -22,6 +22,15 @@ interface DisplayQuestion extends RawQuestion {
   shuffledCorrectIndex: number;
 }
 
+const CATEGORIES = [
+  { id: 'all', label: '全分野' },
+  { id: '電気事業法', label: '電気事業法' },
+  { id: '技術基準', label: '技術基準' },
+  { id: '施設管理', label: '施設管理' },
+] as const;
+
+type CategoryFilter = (typeof CATEGORIES)[number]['id'];
+
 function shuffleArray<T>(array: T[]): T[] {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -31,21 +40,18 @@ function shuffleArray<T>(array: T[]): T[] {
   return arr;
 }
 
-// 組み合わせ選択肢の判定補助（「ア」「イ」等の区切りがあるか解析）
 function parseOptionItems(text: string) {
-  // 「|」区切り、または「ア」「イ」「ウ」「エ」を基準に分割判定
   if (text.includes('|')) {
     return text.split('|').map((t) => t.trim());
   }
   const parts = text.split(/(?=[（(]?[アイウエオ][）)]?[\s:：])/).map((t) => t.trim()).filter(Boolean);
-  if (parts.length >= 2) {
-    return parts;
-  }
+  if (parts.length >= 2) return parts;
   return null;
 }
 
 export default function Home() {
   const [mode, setMode] = useState<'all' | 'review' | 'exam'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<CategoryFilter>('all');
   const [questions, setQuestions] = useState<DisplayQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -112,11 +118,18 @@ export default function Home() {
     let rawList: RawQuestion[] = [];
 
     if (mode === 'all') {
-      const { data } = await supabase
+      let query = supabase
         .from('questions')
         .select('*')
         .order('priority_rank', { ascending: true })
         .order('frequency_score', { ascending: false });
+
+      if (selectedCategory !== 'all') {
+        // 「技術基準」や「電気事業法」等の前方一致・部分一致対応
+        query = query.ilike('category', `%${selectedCategory}%`);
+      }
+
+      const { data } = await query;
       rawList = data || [];
     } else if (mode === 'review') {
       if (!user) {
@@ -132,6 +145,7 @@ export default function Home() {
 
       rawList = (data?.map((item: any) => item.questions).filter(Boolean) as RawQuestion[]) || [];
     } else if (mode === 'exam') {
+      // 模試モード：本試験比率（A問題・B問題・各分野バランス抽出）
       const { data } = await supabase.from('questions').select('*');
       if (data) {
         rawList = shuffleArray(data).slice(0, 10);
@@ -152,7 +166,7 @@ export default function Home() {
 
     setQuestions(preparedList);
     setLoading(false);
-  }, [mode, user]);
+  }, [mode, selectedCategory, user]);
 
   useEffect(() => {
     loadQuestions();
@@ -223,7 +237,7 @@ export default function Home() {
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(currentIndex + 1);
     } else {
-      alert(mode === 'review' ? '復習対象の問題をすべて解き終えました！' : 'すべての問題を解き終えました！');
+      alert(mode === 'review' ? '復習対象の問題をすべて解き終えました！' : 'この分野の問題をすべて解き終えました！');
       loadQuestions();
     }
   };
@@ -254,7 +268,7 @@ export default function Home() {
           <div>
             <h1 className="text-base font-bold tracking-tight text-slate-800">電験三種 法規マスター</h1>
             <p className="text-[11px] text-slate-500 truncate max-w-[200px]">
-              {user ? user.email : '未ログイン（履歴は保存されません）'}
+              {user ? user.email : '未ログイン（履歴保存なし）'}
             </p>
           </div>
 
@@ -295,14 +309,15 @@ export default function Home() {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-200/70 rounded-xl mb-4 text-xs font-bold">
+        {/* 3大モード切り替え */}
+        <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-200/70 rounded-xl mb-3 text-xs font-bold">
           <button
             onClick={() => setMode('all')}
             className={`py-2 rounded-lg transition ${
               mode === 'all' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            頻出順演習
+            頻出問題演習
           </button>
           <button
             onClick={() => {
@@ -329,10 +344,39 @@ export default function Home() {
           </button>
         </div>
 
+        {/* 分野別セレクター（頻出問題演習モード時のみ表示） */}
+        {mode === 'all' && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-4 scrollbar-none">
+            {CATEGORIES.map((cat) => {
+              const isActive = selectedCategory === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => setSelectedCategory(cat.id)}
+                  className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs font-bold border transition ${
+                    isActive
+                      ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 進捗バー */}
         {questions.length > 0 && !isExamFinished && (
           <div className="mb-4">
             <div className="flex justify-between items-center text-xs font-bold text-slate-500 mb-1.5">
-              <span>{mode === 'exam' ? '本試験形式 模試' : mode === 'review' ? '弱点復習' : '頻出順'}</span>
+              <span>
+                {mode === 'exam'
+                  ? '本試験形式 模試'
+                  : mode === 'review'
+                  ? '弱点復習'
+                  : `${CATEGORIES.find((c) => c.id === selectedCategory)?.label}`}
+              </span>
               <span>{currentIndex + 1} / {questions.length} 問</span>
             </div>
             <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
@@ -346,6 +390,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* 模試結果 */}
         {mode === 'exam' && isExamFinished && examResult && (
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm text-center mb-6">
             <span className="text-4xl mb-2 inline-block">{examResult.isPassed ? '🎉' : '📚'}</span>
@@ -358,7 +403,7 @@ export default function Home() {
             </p>
 
             <div className={`p-3 rounded-lg text-sm font-bold mb-6 ${examResult.isPassed ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'}`}>
-              {examResult.isPassed ? '合格基準（60点）をクリアしました！' : '合格基準（60点）未満です。弱点問題を復習しましょう！'}
+              {examResult.isPassed ? '合格基準（60点）達成！この調子で盤石にしましょう。' : '合格基準（60点）未満です。間違えた問題を復習モードで固めましょう。'}
             </div>
 
             <div className="text-left space-y-3 mb-6">
@@ -389,6 +434,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* 出題カード */}
         {loading ? (
           <div className="bg-white rounded-2xl p-12 text-center text-slate-400 text-sm border border-slate-200">
             問題を読み込み中...
@@ -396,14 +442,17 @@ export default function Home() {
         ) : !isExamFinished && questions.length === 0 ? (
           <div className="bg-white rounded-2xl p-10 text-center border border-slate-200">
             <p className="text-slate-700 font-bold mb-2">
-              {mode === 'review' ? '復習対象の問題はありません 🎉' : '問題が登録されていません。'}
+              該当する問題がありません。
             </p>
-            {mode === 'review' && (
+            <p className="text-xs text-slate-400 mb-4">
+              データを投入するか、別の分野を選択してください。
+            </p>
+            {mode === 'all' && selectedCategory !== 'all' && (
               <button
-                onClick={() => setMode('all')}
-                className="mt-3 text-xs font-semibold px-4 py-2 bg-blue-600 text-white rounded-lg"
+                onClick={() => setSelectedCategory('all')}
+                className="text-xs font-semibold px-4 py-2 bg-blue-600 text-white rounded-lg"
               >
-                全問演習に戻る
+                全分野を表示
               </button>
             )}
           </div>
@@ -413,6 +462,11 @@ export default function Home() {
               <span className="text-[11px] px-2 py-0.5 rounded font-bold bg-slate-100 text-slate-700">
                 {currentQ.category}
               </span>
+              {currentQ.sub_category && (
+                <span className="text-[11px] px-2 py-0.5 rounded font-medium bg-slate-100 text-slate-600">
+                  {currentQ.sub_category}
+                </span>
+              )}
               {mode !== 'exam' && (
                 <span className="text-[11px] px-2 py-0.5 rounded font-bold bg-blue-50 text-blue-700">
                   ランク {currentQ.priority_rank}
@@ -424,7 +478,7 @@ export default function Home() {
               {currentQ.question_text}
             </p>
 
-            {/* 本試験風 選択肢リスト（単問・組み合わせ両対応） */}
+            {/* 選択肢リスト */}
             <div className="space-y-2.5">
               {currentQ.shuffledOptions.map((optText, idx) => {
                 const isSelected = selectedOption === idx;
@@ -453,7 +507,6 @@ export default function Home() {
                   >
                     <span className="shrink-0 font-bold text-sm w-7 text-center">({idx + 1})</span>
 
-                    {/* 組み合わせ形式（ア・イ・ウ・エ）がある場合はグリッド状に配置 */}
                     {parsedCells ? (
                       <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs sm:text-sm">
                         {parsedCells.map((cell, cIdx) => (
@@ -492,7 +545,7 @@ export default function Home() {
                   onClick={handleNext}
                   className="w-full py-3.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl active:scale-[0.98] transition shadow-sm"
                 >
-                  {currentIndex < questions.length - 1 ? '次の問題へ' : '演習を終了する'}
+                  {currentIndex < questions.length - 1 ? '次の問題へ' : 'この分野を完了する'}
                 </button>
               )}
             </div>
