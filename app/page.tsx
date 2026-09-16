@@ -23,6 +23,17 @@ interface DisplayQuestion extends RawQuestion {
   shuffledCorrectIndex: number;
 }
 
+interface ExamSessionRecord {
+  id: string;
+  score: number;
+  total_questions: number;
+  correct_count: number;
+  is_passed: boolean;
+  question_snapshots: DisplayQuestion[];
+  user_answers: { [key: number]: number };
+  created_at: string;
+}
+
 const CATEGORIES = [
   { id: 'all', label: '全分野' },
   { id: '電気事業法', label: '電気事業法' },
@@ -51,7 +62,7 @@ function parseOptionItems(text: string) {
 }
 
 export default function Home() {
-  const [mode, setMode] = useState<'all' | 'review' | 'exam'>('all');
+  const [mode, setMode] = useState<'all' | 'review' | 'exam' | 'history'>('all');
   const [selectedCategory, setSelectedCategory] = useState<CategoryFilter>('all');
   const [questions, setQuestions] = useState<DisplayQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -59,11 +70,15 @@ export default function Home() {
   const [isAnswered, setIsAnswered] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // 模試用
+  // 模試ステート
   const [examAnswers, setExamAnswers] = useState<{ [qIndex: number]: number }>({});
   const [isExamFinished, setIsExamFinished] = useState(false);
 
-  // 成績
+  // 過去10回の模試履歴
+  const [examHistory, setExamHistory] = useState<ExamSessionRecord[]>([]);
+  const [selectedSession, setSelectedSession] = useState<ExamSessionRecord | null>(null);
+
+  // ユーザー統計
   const [totalAnsweredCount, setTotalAnsweredCount] = useState(0);
   const [totalCorrectCount, setTotalCorrectCount] = useState(0);
 
@@ -99,16 +114,34 @@ export default function Home() {
     }
   }, []);
 
+  // 過去10回分の模試履歴を取得
+  const fetchExamHistory = useCallback(async (userId: string) => {
+    const { data, error } = await supabase
+      .from('exam_sessions')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    if (!error && data) {
+      setExamHistory(data as ExamSessionRecord[]);
+    }
+  }, []);
+
   useEffect(() => {
     if (user) {
       fetchUserStats(user.id);
+      fetchExamHistory(user.id);
     } else {
       setTotalAnsweredCount(0);
       setTotalCorrectCount(0);
+      setExamHistory([]);
     }
-  }, [user, fetchUserStats]);
+  }, [user, fetchUserStats, fetchExamHistory]);
 
   const loadQuestions = useCallback(async () => {
+    if (mode === 'history') return;
+
     setLoading(true);
     setCurrentIndex(0);
     setSelectedOption(null);
@@ -145,6 +178,7 @@ export default function Home() {
 
       rawList = (data?.map((item: any) => item.questions).filter(Boolean) as RawQuestion[]) || [];
     } else if (mode === 'exam') {
+      // 模試モード：全問題プールからランダム10問
       const { data } = await supabase.from('questions').select('*');
       if (data) {
         rawList = shuffleArray(data).slice(0, 10);
@@ -191,16 +225,47 @@ export default function Home() {
     };
   }, [mode, isExamFinished, questions, examAnswers]);
 
+  // 模試終了時にセッションをSupabaseへ自動保存
+  const saveExamSession = useCallback(
+    async (finalAnswers: { [key: number]: number }) => {
+      if (!user || questions.length === 0) return;
+      let correctCount = 0;
+      questions.forEach((q, idx) => {
+        if (finalAnswers[idx] === q.shuffledCorrectIndex) {
+          correctCount += 1;
+        }
+      });
+      const score = Math.round((correctCount / questions.length) * 100);
+      const isPassed = score >= 60;
+
+      await supabase.from('exam_sessions').insert({
+        user_id: user.id,
+        score,
+        total_questions: questions.length,
+        correct_count: correctCount,
+        is_passed: isPassed,
+        question_snapshots: questions,
+        user_answers: finalAnswers,
+      });
+
+      fetchExamHistory(user.id);
+    },
+    [user, questions, fetchExamHistory]
+  );
+
   const handleJudge = async () => {
     if (selectedOption === null || !currentQ) return;
 
     if (mode === 'exam') {
-      setExamAnswers((prev) => ({ ...prev, [currentIndex]: selectedOption }));
+      const nextAnswers = { ...examAnswers, [currentIndex]: selectedOption };
+      setExamAnswers(nextAnswers);
+
       if (currentIndex < questions.length - 1) {
         setCurrentIndex(currentIndex + 1);
         setSelectedOption(examAnswers[currentIndex + 1] ?? null);
       } else {
         setIsExamFinished(true);
+        saveExamSession(nextAnswers);
       }
       return;
     }
@@ -308,14 +373,15 @@ export default function Home() {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-200/70 rounded-xl mb-3 text-xs font-bold">
+        {/* 4モード切り替え */}
+        <div className="grid grid-cols-4 gap-1 p-1 bg-slate-200/70 rounded-xl mb-3 text-xs font-bold">
           <button
             onClick={() => setMode('all')}
             className={`py-2 rounded-lg transition ${
               mode === 'all' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            頻出問題演習
+            頻出演習
           </button>
           <button
             onClick={() => {
@@ -330,7 +396,7 @@ export default function Home() {
               mode === 'review' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            要復習のみ
+            要復習
           </button>
           <button
             onClick={() => setMode('exam')}
@@ -340,8 +406,24 @@ export default function Home() {
           >
             模擬試験
           </button>
+          <button
+            onClick={() => {
+              if (!user) {
+                alert('模試履歴を確認するにはログインが必要です。');
+                setShowAuthModal(true);
+                return;
+              }
+              setMode('history');
+            }}
+            className={`py-2 rounded-lg transition ${
+              mode === 'history' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            過去模試10
+          </button>
         </div>
 
+        {/* 分野別セレクター */}
         {mode === 'all' && (
           <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-4 scrollbar-none">
             {CATEGORIES.map((cat) => {
@@ -363,7 +445,113 @@ export default function Home() {
           </div>
         )}
 
-        {questions.length > 0 && !isExamFinished && (
+        {/* 過去10回分の模試見直しモード画面 */}
+        {mode === 'history' && (
+          <div className="space-y-4 mb-6">
+            <h2 className="text-sm font-bold text-slate-700">過去10回の模擬試験 記録一覧</h2>
+            {examHistory.length === 0 ? (
+              <div className="bg-white rounded-2xl p-8 text-center border border-slate-200 text-xs text-slate-400">
+                まだ保存された模試結果がありません。「模擬試験」を受けてみましょう！
+              </div>
+            ) : selectedSession ? (
+              <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
+                <button
+                  onClick={() => setSelectedSession(null)}
+                  className="text-xs font-bold text-blue-600 mb-3 block"
+                >
+                  ← 模試履歴一覧に戻る
+                </button>
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                  <div>
+                    <span className="text-xs text-slate-400">
+                      {new Date(selectedSession.created_at).toLocaleString('ja-JP')} 実施
+                    </span>
+                    <p className={`text-xl font-black ${selectedSession.is_passed ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {selectedSession.score} 点
+                      <span className="text-xs font-normal text-slate-500 ml-2">
+                        ({selectedSession.correct_count} / {selectedSession.total_questions} 問正解)
+                      </span>
+                    </p>
+                  </div>
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${selectedSession.is_passed ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                    {selectedSession.is_passed ? '合格' : '不合格'}
+                  </span>
+                </div>
+
+                <div className="space-y-4">
+                  {selectedSession.question_snapshots.map((q, idx) => {
+                    const userChoice = selectedSession.user_answers[idx];
+                    const isItemCorrect = userChoice === q.shuffledCorrectIndex;
+                    return (
+                      <div key={idx} className="p-4 rounded-xl border border-slate-200 bg-slate-50 text-xs">
+                        <div className="flex items-center justify-between font-bold mb-2">
+                          <span>第 {idx + 1} 問 ({q.category})</span>
+                          <span className={isItemCorrect ? 'text-emerald-600' : 'text-rose-600'}>
+                            {isItemCorrect ? '⭕ 正解' : '❌ 不正解'}
+                          </span>
+                        </div>
+                        <p className="font-medium text-slate-800 mb-2">
+                          <LatexText content={q.question_text} />
+                        </p>
+                        <div className="space-y-1 mb-3">
+                          {q.shuffledOptions.map((opt, oIdx) => (
+                            <div
+                              key={oIdx}
+                              className={`p-2 rounded border ${
+                                oIdx === q.shuffledCorrectIndex
+                                  ? 'bg-emerald-50 border-emerald-300 font-bold text-emerald-900'
+                                  : oIdx === userChoice
+                                  ? 'bg-rose-50 border-rose-300 line-through text-rose-800'
+                                  : 'bg-white border-slate-100 text-slate-600'
+                              }`}
+                            >
+                              ({oIdx + 1}) <LatexText content={opt} />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="bg-white p-3 rounded-lg border border-slate-100 text-slate-700 leading-relaxed">
+                          <span className="font-bold block text-slate-500 mb-1">解説:</span>
+                          <LatexText content={q.explanation} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {examHistory.map((item, index) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setSelectedSession(item)}
+                    className="w-full text-left p-4 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between hover:bg-slate-50 transition"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-bold text-sm text-slate-800">第 {examHistory.length - index} 回 模試</span>
+                        <span className={`text-[11px] px-2 py-0.5 rounded font-bold ${item.is_passed ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                          {item.is_passed ? '合格' : '不合格'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        {new Date(item.created_at).toLocaleString('ja-JP')}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className={`text-xl font-extrabold ${item.is_passed ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {item.score} <span className="text-xs text-slate-400 font-normal">点</span>
+                      </span>
+                      <p className="text-[11px] text-slate-400">見直す →</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 通常出題・模試出題画面 */}
+        {mode !== 'history' && questions.length > 0 && !isExamFinished && (
           <div className="mb-4">
             <div className="flex justify-between items-center text-xs font-bold text-slate-500 mb-1.5">
               <span>
@@ -386,6 +574,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* 模試直後採点結果 */}
         {mode === 'exam' && isExamFinished && examResult && (
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm text-center mb-6">
             <span className="text-4xl mb-2 inline-block">{examResult.isPassed ? '🎉' : '📚'}</span>
@@ -429,25 +618,8 @@ export default function Home() {
           </div>
         )}
 
-        {loading ? (
-          <div className="bg-white rounded-2xl p-12 text-center text-slate-400 text-sm border border-slate-200">
-            問題を読み込み中...
-          </div>
-        ) : !isExamFinished && questions.length === 0 ? (
-          <div className="bg-white rounded-2xl p-10 text-center border border-slate-200">
-            <p className="text-slate-700 font-bold mb-2">
-              該当する問題がありません。
-            </p>
-            {mode === 'all' && selectedCategory !== 'all' && (
-              <button
-                onClick={() => setSelectedCategory('all')}
-                className="text-xs font-semibold px-4 py-2 bg-blue-600 text-white rounded-lg"
-              >
-                全分野を表示
-              </button>
-            )}
-          </div>
-        ) : !isExamFinished && currentQ && (
+        {/* 出題カード */}
+        {mode !== 'history' && !isExamFinished && currentQ && (
           <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm mb-5">
             <div className="flex items-center gap-2 mb-3">
               <span className="text-[11px] px-2 py-0.5 rounded font-bold bg-slate-100 text-slate-700">
@@ -458,19 +630,12 @@ export default function Home() {
                   {currentQ.sub_category}
                 </span>
               )}
-              {mode !== 'exam' && (
-                <span className="text-[11px] px-2 py-0.5 rounded font-bold bg-blue-50 text-blue-700">
-                  ランク {currentQ.priority_rank}
-                </span>
-              )}
             </div>
 
-            {/* 問題文（数式レンダリング対応） */}
             <div className="text-[15px] sm:text-base text-slate-800 font-medium leading-relaxed mb-6 whitespace-pre-wrap">
               <LatexText content={currentQ.question_text} />
             </div>
 
-            {/* 選択肢リスト */}
             <div className="space-y-2.5">
               {currentQ.shuffledOptions.map((optText, idx) => {
                 const isSelected = selectedOption === idx;
@@ -524,7 +689,7 @@ export default function Home() {
                   disabled={selectedOption === null}
                   className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-bold rounded-xl active:scale-[0.98] transition shadow-sm"
                 >
-                  {currentIndex < questions.length - 1 ? '次の問題へ' : '試験を終了して採点'}
+                  {currentIndex < questions.length - 1 ? '次の問題へ' : '試験を終了して保存・採点'}
                 </button>
               ) : !isAnswered ? (
                 <button
@@ -546,8 +711,8 @@ export default function Home() {
           </div>
         )}
 
-        {/* 解説（数式レンダリング対応） */}
-        {mode !== 'exam' && isAnswered && currentQ && (
+        {/* 解説 */}
+        {mode !== 'history' && mode !== 'exam' && isAnswered && currentQ && (
           <div className={`p-5 rounded-2xl border mb-6 ${isCorrect ? 'bg-emerald-50/70 border-emerald-200' : 'bg-rose-50/70 border-rose-200'}`}>
             <span className={`text-base font-bold block mb-1 ${isCorrect ? 'text-emerald-700' : 'text-rose-700'}`}>
               {isCorrect ? '⭕ 正解！' : '❌ 不正解...'}
@@ -562,6 +727,7 @@ export default function Home() {
         )}
       </div>
 
+      {/* 認証モーダル */}
       {showAuthModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100">
