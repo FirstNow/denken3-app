@@ -17,13 +17,11 @@ interface RawQuestion {
   law_reference: string;
 }
 
-// 選択肢シャッフル用の型
 interface DisplayQuestion extends RawQuestion {
   shuffledOptions: string[];
-  shuffledCorrectIndex: number; // 0-based
+  shuffledCorrectIndex: number;
 }
 
-// Fisher-Yates シャッフル関数
 function shuffleArray<T>(array: T[]): T[] {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -33,23 +31,36 @@ function shuffleArray<T>(array: T[]): T[] {
   return arr;
 }
 
+// 組み合わせ選択肢の判定補助（「ア」「イ」等の区切りがあるか解析）
+function parseOptionItems(text: string) {
+  // 「|」区切り、または「ア」「イ」「ウ」「エ」を基準に分割判定
+  if (text.includes('|')) {
+    return text.split('|').map((t) => t.trim());
+  }
+  const parts = text.split(/(?=[（(]?[アイウエオ][）)]?[\s:：])/).map((t) => t.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    return parts;
+  }
+  return null;
+}
+
 export default function Home() {
   const [mode, setMode] = useState<'all' | 'review' | 'exam'>('all');
   const [questions, setQuestions] = useState<DisplayQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedOption, setSelectedOption] = useState<number | null>(null); // 0-based
+  const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [isAnswered, setIsAnswered] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // 模試モード専用ステート
+  // 模試用
   const [examAnswers, setExamAnswers] = useState<{ [qIndex: number]: number }>({});
   const [isExamFinished, setIsExamFinished] = useState(false);
 
-  // ユーザー成績集計用ステート
+  // 成績
   const [totalAnsweredCount, setTotalAnsweredCount] = useState(0);
   const [totalCorrectCount, setTotalCorrectCount] = useState(0);
 
-  // 認証関連
+  // 認証
   const [user, setUser] = useState<User | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
@@ -57,7 +68,6 @@ export default function Home() {
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // 1. ログイン状態の監視
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user);
@@ -70,7 +80,6 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // 2. ユーザーの累計成績を取得
   const fetchUserStats = useCallback(async (userId: string) => {
     const { data, error } = await supabase
       .from('user_answers')
@@ -92,7 +101,6 @@ export default function Home() {
     }
   }, [user, fetchUserStats]);
 
-  // 3. 問題の読み込みと選択肢シャッフル
   const loadQuestions = useCallback(async () => {
     setLoading(true);
     setCurrentIndex(0);
@@ -104,7 +112,6 @@ export default function Home() {
     let rawList: RawQuestion[] = [];
 
     if (mode === 'all') {
-      // 頻出度順
       const { data } = await supabase
         .from('questions')
         .select('*')
@@ -112,7 +119,6 @@ export default function Home() {
         .order('frequency_score', { ascending: false });
       rawList = data || [];
     } else if (mode === 'review') {
-      // 復習（不正解リスト）
       if (!user) {
         setQuestions([]);
         setLoading(false);
@@ -126,14 +132,12 @@ export default function Home() {
 
       rawList = (data?.map((item: any) => item.questions).filter(Boolean) as RawQuestion[]) || [];
     } else if (mode === 'exam') {
-      // 模試モード：全問題からランダム抽出（本試験を意識して全件または指定数を抽出）
       const { data } = await supabase.from('questions').select('*');
       if (data) {
-        rawList = shuffleArray(data).slice(0, 10); // 現在の登録数に合わせて最大10問抽出
+        rawList = shuffleArray(data).slice(0, 10);
       }
     }
 
-    // 選択肢のシャッフル処理（正解インデックスの追従）
     const preparedList: DisplayQuestion[] = rawList.map((q) => {
       const originalCorrectText = q.options[q.correct_option - 1];
       const shuffled = shuffleArray(q.options);
@@ -157,7 +161,6 @@ export default function Home() {
   const currentQ = questions[currentIndex];
   const isCorrect = selectedOption === currentQ?.shuffledCorrectIndex;
 
-  // 模試モード時の得点計算（1問10点換算・100点満点）
   const examResult = useMemo(() => {
     if (mode !== 'exam' || !isExamFinished) return null;
     let correctCount = 0;
@@ -175,12 +178,10 @@ export default function Home() {
     };
   }, [mode, isExamFinished, questions, examAnswers]);
 
-  // 回答確定処理
   const handleJudge = async () => {
     if (selectedOption === null || !currentQ) return;
 
     if (mode === 'exam') {
-      // 模試モードは即時判定せず、回答を記録して次へ
       setExamAnswers((prev) => ({ ...prev, [currentIndex]: selectedOption }));
       if (currentIndex < questions.length - 1) {
         setCurrentIndex(currentIndex + 1);
@@ -191,12 +192,10 @@ export default function Home() {
       return;
     }
 
-    // 通常・復習モードは即時判定
     setIsAnswered(true);
 
     if (user) {
       const correct = selectedOption === currentQ.shuffledCorrectIndex;
-      // 1-based の元の正解番号ではなく、判定結果をもとに保存
       await supabase.from('user_answers').insert({
         user_id: user.id,
         question_id: currentQ.id,
@@ -229,7 +228,6 @@ export default function Home() {
     }
   };
 
-  // 認証ハンドラ
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
@@ -250,8 +248,7 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 pb-16">
-      {/* ナビゲーションバー */}
+    <main className="min-h-screen bg-slate-50 text-slate-900 pb-20">
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200 px-4 py-3">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div>
@@ -282,7 +279,6 @@ export default function Home() {
       </header>
 
       <div className="max-w-2xl mx-auto px-4 pt-4">
-        {/* 学習統計カード */}
         {user && (
           <div className="bg-white rounded-xl p-3.5 mb-4 border border-slate-200 shadow-sm grid grid-cols-2 gap-4">
             <div>
@@ -299,7 +295,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* 3モード切り替えタブ */}
         <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-200/70 rounded-xl mb-4 text-xs font-bold">
           <button
             onClick={() => setMode('all')}
@@ -334,11 +329,10 @@ export default function Home() {
           </button>
         </div>
 
-        {/* 進捗バー */}
         {questions.length > 0 && !isExamFinished && (
           <div className="mb-4">
             <div className="flex justify-between items-center text-xs font-bold text-slate-500 mb-1.5">
-              <span>{mode === 'exam' ? '模試（本番解答中）' : mode === 'review' ? '弱点復習' : '頻出順'}</span>
+              <span>{mode === 'exam' ? '本試験形式 模試' : mode === 'review' ? '弱点復習' : '頻出順'}</span>
               <span>{currentIndex + 1} / {questions.length} 問</span>
             </div>
             <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
@@ -352,7 +346,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* 模試結果画面 */}
         {mode === 'exam' && isExamFinished && examResult && (
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm text-center mb-6">
             <span className="text-4xl mb-2 inline-block">{examResult.isPassed ? '🎉' : '📚'}</span>
@@ -365,12 +358,11 @@ export default function Home() {
             </p>
 
             <div className={`p-3 rounded-lg text-sm font-bold mb-6 ${examResult.isPassed ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'}`}>
-              {examResult.isPassed ? '合格基準（60点）を達成しました！' : '合格基準（60点）に届きませんでした。復習しましょう！'}
+              {examResult.isPassed ? '合格基準（60点）をクリアしました！' : '合格基準（60点）未満です。弱点問題を復習しましょう！'}
             </div>
 
-            {/* 各問の振り返りリスト */}
             <div className="text-left space-y-3 mb-6">
-              <p className="text-xs font-bold text-slate-500">問題ごとの解答状況</p>
+              <p className="text-xs font-bold text-slate-500">各問の採点結果</p>
               {questions.map((q, idx) => {
                 const userChoice = examAnswers[idx];
                 const isItemCorrect = userChoice === q.shuffledCorrectIndex;
@@ -397,7 +389,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* 問題画面 */}
         {loading ? (
           <div className="bg-white rounded-2xl p-12 text-center text-slate-400 text-sm border border-slate-200">
             問題を読み込み中...
@@ -429,21 +420,21 @@ export default function Home() {
               )}
             </div>
 
-            <p className="text-[15px] sm:text-base text-slate-800 font-medium leading-relaxed mb-5 whitespace-pre-wrap">
+            <p className="text-[15px] sm:text-base text-slate-800 font-medium leading-relaxed mb-6 whitespace-pre-wrap">
               {currentQ.question_text}
             </p>
 
-            {/* 選択肢一覧（タップ領域を48px以上確保） */}
+            {/* 本試験風 選択肢リスト（単問・組み合わせ両対応） */}
             <div className="space-y-2.5">
               {currentQ.shuffledOptions.map((optText, idx) => {
                 const isSelected = selectedOption === idx;
-                let itemStyle = 'border-slate-200 bg-white text-slate-700 active:bg-slate-100';
+                const parsedCells = parseOptionItems(optText);
 
+                let itemStyle = 'border-slate-200 bg-white text-slate-700 active:bg-slate-100';
                 if (isSelected) {
                   itemStyle = 'border-blue-500 bg-blue-50 text-blue-900 ring-2 ring-blue-400 font-semibold';
                 }
 
-                // 通常モードの判定後スタイル
                 if (isAnswered && mode !== 'exam') {
                   if (idx === currentQ.shuffledCorrectIndex) {
                     itemStyle = 'border-emerald-500 bg-emerald-50 text-emerald-900 font-bold';
@@ -458,16 +449,27 @@ export default function Home() {
                     onClick={() => {
                       if (!isAnswered || mode === 'exam') setSelectedOption(idx);
                     }}
-                    className={`w-full text-left p-3.5 sm:p-4 rounded-xl border min-h-[50px] transition-all flex items-start gap-3 ${itemStyle}`}
+                    className={`w-full text-left p-3 sm:p-3.5 rounded-xl border min-h-[50px] transition-all flex items-center gap-3 ${itemStyle}`}
                   >
-                    <span className="shrink-0 font-bold text-sm">({idx + 1})</span>
-                    <span className="text-sm leading-snug">{optText}</span>
+                    <span className="shrink-0 font-bold text-sm w-7 text-center">({idx + 1})</span>
+
+                    {/* 組み合わせ形式（ア・イ・ウ・エ）がある場合はグリッド状に配置 */}
+                    {parsedCells ? (
+                      <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs sm:text-sm">
+                        {parsedCells.map((cell, cIdx) => (
+                          <span key={cIdx} className="bg-slate-100/80 px-2 py-1 rounded text-slate-800 font-medium">
+                            {cell}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-sm leading-snug flex-1">{optText}</span>
+                    )}
                   </button>
                 );
               })}
             </div>
 
-            {/* アクションボタン */}
             <div className="mt-6">
               {mode === 'exam' ? (
                 <button
@@ -497,7 +499,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* 解説（通常・復習モード時のみ即時表示） */}
         {mode !== 'exam' && isAnswered && currentQ && (
           <div className={`p-5 rounded-2xl border mb-6 ${isCorrect ? 'bg-emerald-50/70 border-emerald-200' : 'bg-rose-50/70 border-rose-200'}`}>
             <span className={`text-base font-bold block mb-1 ${isCorrect ? 'text-emerald-700' : 'text-rose-700'}`}>
@@ -513,7 +514,6 @@ export default function Home() {
         )}
       </div>
 
-      {/* 認証モーダル */}
       {showAuthModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100">
