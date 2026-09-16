@@ -114,7 +114,6 @@ export default function Home() {
     }
   }, []);
 
-  // 過去10回分の模試履歴を取得
   const fetchExamHistory = useCallback(async (userId: string) => {
     const { data, error } = await supabase
       .from('exam_sessions')
@@ -178,7 +177,6 @@ export default function Home() {
 
       rawList = (data?.map((item: any) => item.questions).filter(Boolean) as RawQuestion[]) || [];
     } else if (mode === 'exam') {
-      // 模試モード：全問題プールからランダム10問
       const { data } = await supabase.from('questions').select('*');
       if (data) {
         rawList = shuffleArray(data).slice(0, 10);
@@ -205,6 +203,29 @@ export default function Home() {
     loadQuestions();
   }, [loadQuestions]);
 
+  // 同じ問題セットで再挑戦（選択肢を再シャッフルして再出題）
+  const retrySameExam = (targetQuestions: DisplayQuestion[]) => {
+    const rePrepared: DisplayQuestion[] = targetQuestions.map((q) => {
+      const originalCorrectText = q.shuffledOptions[q.shuffledCorrectIndex];
+      const shuffled = shuffleArray(q.shuffledOptions);
+      const newCorrectIndex = shuffled.indexOf(originalCorrectText);
+      return {
+        ...q,
+        shuffledOptions: shuffled,
+        shuffledCorrectIndex: newCorrectIndex,
+      };
+    });
+
+    setQuestions(rePrepared);
+    setCurrentIndex(0);
+    setSelectedOption(null);
+    setIsAnswered(false);
+    setExamAnswers({});
+    setIsExamFinished(false);
+    setSelectedSession(null);
+    setMode('exam');
+  };
+
   const currentQ = questions[currentIndex];
   const isCorrect = selectedOption === currentQ?.shuffledCorrectIndex;
 
@@ -225,7 +246,6 @@ export default function Home() {
     };
   }, [mode, isExamFinished, questions, examAnswers]);
 
-  // 模試終了時にセッションをSupabaseへ自動保存
   const saveExamSession = useCallback(
     async (finalAnswers: { [key: number]: number }) => {
       if (!user || questions.length === 0) return;
@@ -445,7 +465,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* 過去10回分の模試見直しモード画面 */}
+        {/* 過去10回分の模試見直し画面 */}
         {mode === 'history' && (
           <div className="space-y-4 mb-6">
             <h2 className="text-sm font-bold text-slate-700">過去10回の模擬試験 記録一覧</h2>
@@ -461,6 +481,7 @@ export default function Home() {
                 >
                   ← 模試履歴一覧に戻る
                 </button>
+
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
                   <div>
                     <span className="text-xs text-slate-400">
@@ -478,6 +499,26 @@ export default function Home() {
                   </span>
                 </div>
 
+                {/* 履歴画面からの再挑戦ボタン */}
+                <div className="grid grid-cols-2 gap-2 mb-6">
+                  <button
+                    onClick={() => retrySameExam(selectedSession.question_snapshots)}
+                    className="py-2.5 px-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs shadow-sm transition active:scale-95"
+                  >
+                    🔁 この回を再挑戦
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedSession(null);
+                      setMode('exam');
+                      loadQuestions();
+                    }}
+                    className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm transition active:scale-95"
+                  >
+                    🎲 新しい模試を受ける
+                  </button>
+                </div>
+
                 <div className="space-y-4">
                   {selectedSession.question_snapshots.map((q, idx) => {
                     const userChoice = selectedSession.user_answers[idx];
@@ -490,9 +531,9 @@ export default function Home() {
                             {isItemCorrect ? '⭕ 正解' : '❌ 不正解'}
                           </span>
                         </div>
-                        <p className="font-medium text-slate-800 mb-2">
+                        <div className="font-medium text-slate-800 mb-2 whitespace-pre-wrap">
                           <LatexText content={q.question_text} />
-                        </p>
+                        </div>
                         <div className="space-y-1 mb-3">
                           {q.shuffledOptions.map((opt, oIdx) => (
                             <div
@@ -509,7 +550,7 @@ export default function Home() {
                             </div>
                           ))}
                         </div>
-                        <div className="bg-white p-3 rounded-lg border border-slate-100 text-slate-700 leading-relaxed">
+                        <div className="bg-white p-3 rounded-lg border border-slate-100 text-slate-700 leading-relaxed whitespace-pre-wrap">
                           <span className="font-bold block text-slate-500 mb-1">解説:</span>
                           <LatexText content={q.explanation} />
                         </div>
@@ -550,7 +591,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* 通常出題・模試出題画面 */}
+        {/* 通常出題・模試出題画面の進捗バー */}
         {mode !== 'history' && questions.length > 0 && !isExamFinished && (
           <div className="mb-4">
             <div className="flex justify-between items-center text-xs font-bold text-slate-500 mb-1.5">
@@ -574,7 +615,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* 模試直後採点結果 */}
+        {/* 模試直後の結果画面（2つの再挑戦ボタン完備） */}
         {mode === 'exam' && isExamFinished && examResult && (
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm text-center mb-6">
             <span className="text-4xl mb-2 inline-block">{examResult.isPassed ? '🎉' : '📚'}</span>
@@ -588,6 +629,22 @@ export default function Home() {
 
             <div className={`p-3 rounded-lg text-sm font-bold mb-6 ${examResult.isPassed ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'}`}>
               {examResult.isPassed ? '合格基準（60点）達成！この調子で盤石にしましょう。' : '合格基準（60点）未満です。間違えた問題を復習モードで固めましょう。'}
+            </div>
+
+            {/* 再挑戦アクションボタン群 */}
+            <div className="grid grid-cols-2 gap-2.5 mb-6">
+              <button
+                onClick={() => retrySameExam(questions)}
+                className="py-3 px-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs sm:text-sm active:scale-[0.98] transition shadow"
+              >
+                🔁 同じ10問で再挑戦
+              </button>
+              <button
+                onClick={() => loadQuestions()}
+                className="py-3 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs sm:text-sm active:scale-[0.98] transition shadow"
+              >
+                🎲 新しい10問で挑戦
+              </button>
             </div>
 
             <div className="text-left space-y-3 mb-6">
@@ -608,13 +665,6 @@ export default function Home() {
                 );
               })}
             </div>
-
-            <button
-              onClick={() => loadQuestions()}
-              className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl active:scale-[0.98] transition shadow"
-            >
-              もう一度模試に挑戦する
-            </button>
           </div>
         )}
 
@@ -711,7 +761,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* 解説 */}
+        {/* 通常・復習モードの解説 */}
         {mode !== 'history' && mode !== 'exam' && isAnswered && currentQ && (
           <div className={`p-5 rounded-2xl border mb-6 ${isCorrect ? 'bg-emerald-50/70 border-emerald-200' : 'bg-rose-50/70 border-rose-200'}`}>
             <span className={`text-base font-bold block mb-1 ${isCorrect ? 'text-emerald-700' : 'text-rose-700'}`}>
@@ -727,7 +777,6 @@ export default function Home() {
         )}
       </div>
 
-      {/* 認証モーダル */}
       {showAuthModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100">
